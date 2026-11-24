@@ -100,6 +100,28 @@ func updateHookTrampoline(handle unsafe.Pointer, op C.int, db *C.char, table *C.
 	callback(int(op), C.GoString(db), C.GoString(table), rowid)
 }
 
+//export walHookTrampoline
+func walHookTrampoline(handlePtr unsafe.Pointer, _ *C.sqlite3, name *C.char, pages C.int) (rc C.int) {
+	hval := lookupHandleVal(handlePtr)
+	// Install the recovery before the type assertion: a handle removed by
+	// Close leaves hval.val nil, and that panic must not unwind through C.
+	defer func() {
+		if r := recover(); r != nil {
+			// The commit already happened, so report success to SQLite and let
+			// the Go caller re-raise the panic after the statement returns.
+			rc = 0
+			if hval.db != nil {
+				hval.db.noteCallbackPanic(r)
+			}
+		}
+	}()
+	callback, ok := hval.val.(func(string, int) int)
+	if !ok {
+		return 0
+	}
+	return C.int(callback(C.GoString(name), int(pages)))
+}
+
 //export authorizerTrampoline
 func authorizerTrampoline(handle unsafe.Pointer, op C.int, arg1 *C.char, arg2 *C.char, arg3 *C.char) C.int {
 	callback := lookupHandle(handle).(func(int, string, string, string) int)

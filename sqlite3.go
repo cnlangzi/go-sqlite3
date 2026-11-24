@@ -351,6 +351,7 @@ int compareTrampoline(void*, int, char*, int, char*);
 int commitHookTrampoline(void*);
 void rollbackHookTrampoline(void*);
 void updateHookTrampoline(void*, int, char*, char*, sqlite3_int64);
+int walHookTrampoline(void*, sqlite3*, char*, int);
 
 int authorizerTrampoline(void*, int, char*, char*, char*, char*);
 
@@ -566,6 +567,11 @@ type SQLiteConn struct {
 	// takes c.mu, so holding c.mu here would invert the lock order.
 	authorizerMu     sync.Mutex
 	authorizerHandle unsafe.Pointer
+	// walHookMu guards walHookHandle. It is deliberately not c.mu:
+	// sqlite3_wal_hook takes db->mutex, and SQLite runs Go callbacks while
+	// holding db->mutex, so taking c.mu here would invert the lock order.
+	walHookMu     sync.Mutex
+	walHookHandle unsafe.Pointer
 	// Prepared-statement cache. The slice is allocated at Open with a
 	// fixed capacity equal to the configured cache size; cap bounds the
 	// cache, len is the live count, and entries are ordered LRU-first
@@ -867,6 +873,47 @@ func (c *SQLiteConn) RegisterUpdateHook(callback func(int, string, string, int64
 	} else {
 		C.sqlite3_update_hook(c.db, (*[0]byte)(C.updateHookTrampoline), newHandle(c, callback))
 	}
+}
+
+// RegisterWalHook sets the WAL hook for a connection.
+//
+// The callback is invoked after each commit in WAL mode. The parameters are
+// the name of the database that was written ("main" or the name of an
+// ATTACHed database) and the number of pages currently in the write-ahead
+// log, including the frames of the commit that just completed.
+//
+// The callback should normally return SQLITE_OK (0). A non-zero return makes
+// the statement that provoked the commit report an error, though the commit
+// itself still occurs.
+//
+// If there is an existing WAL hook for this connection, it will be removed.
+// If callback is nil the existing hook (if any) will be removed without
+// creating a new one.
+//
+// The callback runs inside SQLite's commit path. It must not call back into
+// the same *SQLiteConn; use another connection if the WAL has to be
+// checkpointed. Registering a hook also disables SQLite's automatic
+// checkpointing (see PRAGMA wal_autocheckpoint), so the write-ahead log has
+// to be checkpointed periodically.
+//
+// The call is a no-op once the connection has been closed.
+func (c *SQLiteConn) RegisterWalHook(callback func(dbName string, nPages int) int) {
+	if !c.dbConnOpen() {
+		return
+	}
+	c.walHookMu.Lock()
+	defer c.walHookMu.Unlock()
+
+	var handle unsafe.Pointer
+	var trampoline *[0]byte
+	if callback != nil {
+		handle = newHandle(c, callback)
+		trampoline = (*[0]byte)(C.walHookTrampoline)
+	}
+	C.sqlite3_wal_hook(c.db, trampoline, handle)
+	// SQLite replaces the previous callback and never calls it again.
+	deleteHandle(c.walHookHandle)
+	c.walHookHandle = handle
 }
 
 // RegisterAuthorizer sets the authorizer for connection.
@@ -2141,6 +2188,10 @@ func (c *SQLiteConn) Close() error {
 	c.authorizerMu.Lock()
 	c.authorizerHandle = nil
 	c.authorizerMu.Unlock()
+	// Lock order is c.mu -> walHookMu; RegisterWalHook never takes c.mu.
+	c.walHookMu.Lock()
+	c.walHookHandle = nil
+	c.walHookMu.Unlock()
 	c.db = nil
 	return nil
 }
