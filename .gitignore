@@ -13,3 +13,6 @@ upgrade/*.h
 # Exclude upgrade binary
 upgrade/upgrade
 .nightme/
+
+# codegraph local index
+.codegraph/
