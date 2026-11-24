@@ -112,19 +112,25 @@ conn.RegisterWalHook(func(dbName string, nPages int) int {
 ```
 
 The callback should return `SQLITE_OK` (0). A non-zero return makes the statement that provoked
-the commit report an error, though the commit itself still occurs.
+the commit report an error, though the commit itself still occurs. Returning `SQLITE_ROW`,
+`SQLITE_DONE` or a value that is not a valid SQLite error code has undefined results.
 
 Keep in mind that:
 
-- The callback runs inside SQLite's commit path. It must not call back into the same
-  `*SQLiteConn`; use another connection if the write-ahead log has to be checkpointed.
+- SQLite calls the callback after the commit has completed and the write lock has been released,
+  so the callback may read or checkpoint the database. It must not write on the same
+  `*SQLiteConn`: that would clobber the state of the statement that provoked the commit and
+  recurse into the hook. Use another connection to write, or to checkpoint the write-ahead log.
 - Registering a hook disables SQLite's automatic checkpointing, so the write-ahead log has to be
   checkpointed periodically, for example with `PRAGMA wal_checkpoint(PASSIVE)` on a second
-  connection.
-- `PRAGMA wal_autocheckpoint` overwrites a hook registered with `RegisterWalHook`.
+  connection. Removing the hook with `RegisterWalHook(nil)` does not restore automatic
+  checkpointing; run `PRAGMA wal_autocheckpoint` to enable it again.
+- `PRAGMA wal_autocheckpoint` overwrites a hook registered with `RegisterWalHook`, which then
+  stops being invoked.
 - The hook is only invoked for databases in WAL mode.
 - A panic raised inside the callback is recovered, the commit still completes, and the panic is
-  re-raised on the goroutine that ran the statement.
+  re-raised on the goroutine that ran the statement. The callback panics again on every later
+  commit until the hook is replaced or removed.
 
 A complete example is available under [_example/wal_hook](./_example/wal_hook).
 

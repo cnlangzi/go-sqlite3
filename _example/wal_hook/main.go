@@ -46,9 +46,10 @@ func main() {
 
 	// Registering a WAL hook disables SQLite's automatic checkpointing, so
 	// the write-ahead log has to be checkpointed from time to time. The
-	// checkpoint runs on a second connection: the callback above runs
-	// inside the commit path of its own connection and must not call back
-	// into that connection.
+	// checkpoint runs on a second connection: the callback above may read
+	// or checkpoint its own database, but it must not write on the same
+	// connection, because that would clobber the state of the statement
+	// that provoked the commit and recurse into the hook.
 	checkpoint, err := sql.Open("sqlite3_with_wal_hook", "./walhook.db?_journal_mode=WAL")
 	if err != nil {
 		log.Fatal(err)

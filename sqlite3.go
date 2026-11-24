@@ -880,23 +880,40 @@ func (c *SQLiteConn) RegisterUpdateHook(callback func(int, string, string, int64
 // The callback is invoked after each commit in WAL mode. The parameters are
 // the name of the database that was written ("main" or the name of an
 // ATTACHed database) and the number of pages currently in the write-ahead
-// log, including the frames of the commit that just completed.
+// log, including the frames of the commit that just completed. It is
+// invoked once per written database, and never when the database is not in
+// WAL mode.
 //
 // The callback should normally return SQLITE_OK (0). A non-zero return makes
 // the statement that provoked the commit report an error, though the commit
-// itself still occurs.
+// itself still occurs. Returning SQLITE_ROW, SQLITE_DONE or a value that is
+// not a valid SQLite error code has undefined results.
 //
 // If there is an existing WAL hook for this connection, it will be removed.
 // If callback is nil the existing hook (if any) will be removed without
 // creating a new one.
 //
-// The callback runs inside SQLite's commit path. It must not call back into
-// the same *SQLiteConn; use another connection if the WAL has to be
-// checkpointed. Registering a hook also disables SQLite's automatic
-// checkpointing (see PRAGMA wal_autocheckpoint), so the write-ahead log has
-// to be checkpointed periodically.
+// SQLite calls the callback after the commit has completed and the write
+// lock has been released, so the callback may read or checkpoint the
+// database. It must not write on the same *SQLiteConn: that would clobber
+// the state of the statement that provoked the commit and recurse into the
+// hook. Use another connection to write, or to checkpoint the write-ahead
+// log.
 //
-// The call is a no-op once the connection has been closed.
+// Registering a hook disables SQLite's automatic checkpointing (see PRAGMA
+// wal_autocheckpoint), so the write-ahead log has to be checkpointed
+// periodically. Removing the hook with a nil callback does not restore
+// automatic checkpointing; run PRAGMA wal_autocheckpoint to enable it again.
+// PRAGMA wal_autocheckpoint also replaces a hook registered with
+// RegisterWalHook, which then stops being invoked.
+//
+// A panic raised by the callback is recovered: the commit still completes
+// and the panic is re-raised on the goroutine that ran the statement. The
+// callback panics again on every later commit until the hook is replaced
+// or removed.
+//
+// The hook is released when the connection is closed, and registering a
+// hook on a closed connection is a no-op.
 func (c *SQLiteConn) RegisterWalHook(callback func(dbName string, nPages int) int) {
 	if !c.dbConnOpen() {
 		return
@@ -2188,7 +2205,8 @@ func (c *SQLiteConn) Close() error {
 	c.authorizerMu.Lock()
 	c.authorizerHandle = nil
 	c.authorizerMu.Unlock()
-	// Lock order is c.mu -> walHookMu; RegisterWalHook never takes c.mu.
+	// Lock order is c.mu -> walHookMu; RegisterWalHook takes c.mu only in
+	// dbConnOpen, which releases it before walHookMu is taken.
 	c.walHookMu.Lock()
 	c.walHookHandle = nil
 	c.walHookMu.Unlock()
