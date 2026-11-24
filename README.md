@@ -1,11 +1,11 @@
 go-sqlite3
 ==========
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/mattn/go-sqlite3.svg)](https://pkg.go.dev/github.com/mattn/go-sqlite3)
-[![GitHub Actions](https://github.com/mattn/go-sqlite3/workflows/Go/badge.svg)](https://github.com/mattn/go-sqlite3/actions?query=workflow%3AGo)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cnlangzi/go-sqlite3.svg)](https://pkg.go.dev/github.com/cnlangzi/go-sqlite3)
+[![GitHub Actions](https://github.com/cnlangzi/go-sqlite3/workflows/Go/badge.svg)](https://github.com/cnlangzi/go-sqlite3/actions?query=workflow%3AGo)
 [![Financial Contributors on Open Collective](https://opencollective.com/mattn-go-sqlite3/all/badge.svg?label=financial+contributors)](https://opencollective.com/mattn-go-sqlite3) 
-[![codecov](https://codecov.io/gh/mattn/go-sqlite3/branch/master/graph/badge.svg)](https://codecov.io/gh/mattn/go-sqlite3)
-[![Go Report Card](https://goreportcard.com/badge/github.com/mattn/go-sqlite3)](https://goreportcard.com/report/github.com/mattn/go-sqlite3)
+[![codecov](https://codecov.io/gh/cnlangzi/go-sqlite3/branch/master/graph/badge.svg)](https://codecov.io/gh/cnlangzi/go-sqlite3)
+[![Go Report Card](https://goreportcard.com/badge/github.com/cnlangzi/go-sqlite3)](https://goreportcard.com/report/github.com/cnlangzi/go-sqlite3)
 
 ## Sponsors
 
@@ -33,6 +33,8 @@ This package follows the official [Golang Release Policy](https://golang.org/doc
 - [go-sqlite3](#go-sqlite3)
 - [Description](#description)
     - [Overview](#overview)
+- [About this fork](#about-this-fork)
+    - [WAL hook](#wal-hook)
 - [Installation](#installation)
 - [API Reference](#api-reference)
 - [Connection String](#connection-string)
@@ -71,11 +73,66 @@ This package follows the official [Golang Release Policy](https://golang.org/doc
 - [License](#license)
 - [Author](#author)
 
+# About this fork
+
+This repository is a fork of [mattn/go-sqlite3](https://github.com/mattn/go-sqlite3). It tracks
+upstream master and adds the following on top of it:
+
+- `(*SQLiteConn).RegisterWalHook`, an API for SQLite's write-ahead log commit hook
+  (`sqlite3_wal_hook`). Upstream does not expose it.
+
+The module path of this fork is `github.com/cnlangzi/go-sqlite3`. Projects that want to keep
+using the `github.com/mattn/go-sqlite3` import path can depend on the fork with a `replace`
+directive:
+
+```
+require github.com/mattn/go-sqlite3 v1.14.53
+
+replace github.com/mattn/go-sqlite3 => github.com/cnlangzi/go-sqlite3 v1.14.54-relay.1
+```
+
+Projects that do not mind the new import path can require the fork directly:
+
+```
+require github.com/cnlangzi/go-sqlite3 v1.14.54-relay.1
+```
+
+## WAL hook
+
+`RegisterWalHook` registers a callback that SQLite invokes after every commit that wrote
+write-ahead log frames. The callback receives the name of the database that was written (`main`
+or the name of an `ATTACH`ed database) and the number of pages currently in the write-ahead log,
+including the frames of the commit that just completed:
+
+```go
+conn.RegisterWalHook(func(dbName string, nPages int) int {
+	log.Printf("commit on %q: %d pages in the write-ahead log", dbName, nPages)
+	return 0 // SQLITE_OK
+})
+```
+
+The callback should return `SQLITE_OK` (0). A non-zero return makes the statement that provoked
+the commit report an error, though the commit itself still occurs.
+
+Keep in mind that:
+
+- The callback runs inside SQLite's commit path. It must not call back into the same
+  `*SQLiteConn`; use another connection if the write-ahead log has to be checkpointed.
+- Registering a hook disables SQLite's automatic checkpointing, so the write-ahead log has to be
+  checkpointed periodically, for example with `PRAGMA wal_checkpoint(PASSIVE)` on a second
+  connection.
+- `PRAGMA wal_autocheckpoint` overwrites a hook registered with `RegisterWalHook`.
+- The hook is only invoked for databases in WAL mode.
+- A panic raised inside the callback is recovered, the commit still completes, and the panic is
+  re-raised on the goroutine that ran the statement.
+
+A complete example is available under [_example/wal_hook](./_example/wal_hook).
+
 # Installation
 
 This package can be installed with the `go get` command:
 
-    go get github.com/mattn/go-sqlite3
+    go get github.com/cnlangzi/go-sqlite3
 
 _go-sqlite3_ is *cgo* package.
 If you want to build your app using go-sqlite3, you need gcc.
@@ -84,7 +141,7 @@ If you want to build your app using go-sqlite3, you need gcc.
 
 # API Reference
 
-API documentation can be found [here](http://godoc.org/github.com/mattn/go-sqlite3).
+API documentation can be found [here](http://godoc.org/github.com/cnlangzi/go-sqlite3).
 
 Examples can be found under the [examples](./_example) directory.
 
@@ -190,7 +247,7 @@ go build -tags "icu json1 fts5 secure_delete"
 | Secure Delete (FAST) | sqlite_secure_delete_fast | For more information see [PRAGMA secure_delete](https://www.sqlite.org/pragma.html#pragma_secure_delete) |
 | Tracing / Debug | sqlite_trace | Activate trace functions |
 | User Authentication | sqlite_userauth | SQLite User Authentication see [User Authentication](#user-authentication) for more information. |
-| Virtual Tables | sqlite_vtable | SQLite Virtual Tables see [SQLite Official VTABLE Documentation](https://www.sqlite.org/vtab.html) for more information, and a [full example here](https://github.com/mattn/go-sqlite3/tree/master/_example/vtable) |
+| Virtual Tables | sqlite_vtable | SQLite Virtual Tables see [SQLite Official VTABLE Documentation](https://www.sqlite.org/vtab.html) for more information, and a [full example here](https://github.com/cnlangzi/go-sqlite3/tree/master/_example/vtable) |
 | The DBSTAT Virtual Table | sqlite_dbstat | The DBSTAT virtual table is a read-only virtual table that returns information about the amount of disk space used to store the content of an SQLite database. See [SQLite Official Documentation](https://www.sqlite.org/dbstat.html) for more information. |
 
 # Compilation
@@ -351,14 +408,14 @@ For example the TDM-GCC Toolchain can be found [here](https://jmeubank.github.io
     > Probably, you are using go 1.0, go1.0 has a problem when it comes to compiling/linking on windows 64bit.
     > See: [#27](https://github.com/mattn/go-sqlite3/issues/27)
 
-- `go get github.com/mattn/go-sqlite3` throws compilation error.
+- `go get github.com/cnlangzi/go-sqlite3` throws compilation error.
 
     `gcc` throws: `internal compiler error`
 
     Remove the download repository from your disk and try re-install with:
 
     ```bash
-    go install github.com/mattn/go-sqlite3
+    go install github.com/cnlangzi/go-sqlite3
     ```
 
 # User Authentication

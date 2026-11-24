@@ -8,7 +8,7 @@ package sqlite3
 import "database/sql"
 
 // This variable can be replaced with -ldflags like below:
-// go build -ldflags="-X 'github.com/mattn/go-sqlite3.driverName=my-sqlite3'"
+// go build -ldflags="-X 'github.com/cnlangzi/go-sqlite3.driverName=my-sqlite3'"
 var driverName = "sqlite3"
 
 func init() {
